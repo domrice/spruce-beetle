@@ -1,4 +1,4 @@
-﻿/*
+/*
  * MIT License
  * 
  * Copyright (c) 2022 Dominik Reisach
@@ -37,7 +37,7 @@ namespace SpruceBeetle
         public override string Name => "Spruce Beetle";
 
         // icon of gh library
-        public override Bitmap Icon => Properties.Resources._24x24_SpruceBeetle;
+        public override Bitmap Icon => Utility.Icon("24x24_SpruceBeetle");
 
         // description of gh library
         public override string Description => "A toolkit for working with timber offcuts and reclaimed timber ";
@@ -58,7 +58,7 @@ namespace SpruceBeetle
         public override GH_LoadingInstruction PriorityLoad()
         {
             // icon of gh library
-            Instances.ComponentServer.AddCategoryIcon("Spruce Beetle", Properties.Resources._24x24_SpruceBeetle);
+            Instances.ComponentServer.AddCategoryIcon("Spruce Beetle", Utility.Icon("24x24_SpruceBeetle"));
 
             // name and abbreviation of gh library
             Instances.ComponentServer.AddCategorySymbolName("Spruce Beetle", 'S');

@@ -1,4 +1,4 @@
-﻿/*
+/*
  * MIT License
  * 
  * Copyright (c) 2022 Dominik Reisach
@@ -53,7 +53,7 @@ namespace SpruceBeetle.Create
         // parameter outputs
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
         {           
-            pManager.AddNumberParameter("Index", "i", "Index of the Offcut", GH_ParamAccess.list);
+            pManager.AddIntegerParameter("Index", "i", "Index of the Offcut", GH_ParamAccess.list);
             pManager.AddNumberParameter("x-Dimension", "x", "x-Dimension of the Offcut", GH_ParamAccess.list);
             pManager.AddNumberParameter("y-Dimension", "y", "y-Dimension of the Offcut", GH_ParamAccess.list);
             pManager.AddNumberParameter("z-Dimension", "z", "z-Dimension of the Offcut", GH_ParamAccess.list);
@@ -93,7 +93,7 @@ namespace SpruceBeetle.Create
             DA.GetDataList(0, inputOffcut);
 
             // initialise lists to store all the data
-            List<double> indexList = new List<double>();
+            List<int> indexList = new List<int>();
             List<double> xList = new List<double>();
             List<double> yList = new List<double>();
             List<double> zList = new List<double>();
@@ -122,12 +122,8 @@ namespace SpruceBeetle.Create
                     zList.Add(inputOffcut[i].Z);
                     volList.Add(inputOffcut[i].Vol);
 
-                    if (inputOffcut[i].FabVol == null)
-                        goto Offcut;
-                    else
-                        fvolList.Add(inputOffcut[i].FabVol);
+                    fvolList.Add(inputOffcut[i].FabVol);
 
-                    Offcut:
                     if (inputOffcut[i].OffcutGeometry == null)
                         goto FirstPlane;
                     else
@@ -164,10 +160,7 @@ namespace SpruceBeetle.Create
                         basePlaneList.Add(inputOffcut[i].BasePlane);
 
                     BasePosition:
-                    if (inputOffcut[i].PositionIndex == null)
-                        continue;
-                    else
-                        basePositionList.Add(inputOffcut[i].PositionIndex);
+                    basePositionList.Add(inputOffcut[i].PositionIndex);
                 }
 
                 // access output parameters
@@ -196,7 +189,7 @@ namespace SpruceBeetle.Create
         public override GH_Exposure Exposure => GH_Exposure.secondary;
 
         // add icon
-        protected override System.Drawing.Bitmap Icon => Properties.Resources._24x24_Deconstruct_Offcut;
+        protected override System.Drawing.Bitmap Icon => Utility.Icon("24x24_Deconstruct Offcut");
 
         // component giud
         public override Guid ComponentGuid => new Guid("1CA17605-92C8-4308-92FF-C949F8CCC34D");

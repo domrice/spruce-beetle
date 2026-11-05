@@ -1,4 +1,4 @@
-﻿/*
+/*
  * MIT License
  * 
  * Copyright (c) 2022 Dominik Reisach
@@ -84,107 +84,11 @@ namespace SpruceBeetle.Alignment
             if (!DA.GetData(3, ref jointY)) return;
             if (!DA.GetData(4, ref splineCount)) return;
 
-            // initialise lists to store all the data
-            Brep[] outputOffcuts = new Brep[alignedOffcuts.Count];
-            Brep[,] outputJoints = new Brep[alignedOffcuts.Count, splineCount];
-            double[] outputOffcutVol = new double[alignedOffcuts.Count];
-            double[] outputJointVol = new double[alignedOffcuts.Count];
-
-            // parallel computed joints with boolean difference
-            System.Threading.Tasks.Parallel.For(0, alignedOffcuts.Count, (i, state) =>
-            {
-                // get the base for the joint position of each Offcut
-                List<double[]> minimumDimensions = Utility.GetMinimumDimension(alignedOffcuts, i);
-                double[] firstMin = minimumDimensions[0];
-                double[] secondMin = minimumDimensions[1];
-
-                // create joints with their respective volumes according to the joint type
-                if (i == 0)
-                {
-                    // call CreateJoints method
-                    CreateSplines(alignedOffcuts[i].SecondPlane, jointX, jointY, toolRadius, secondMin, alignedOffcuts[i].Y, alignedOffcuts[i].PositionIndex, splineCount, out Brep[] joints, out Brep[] display);
-
-                    // call CutOffcut method
-                    Brep cutOffcut = Joint.CutOffcut(joints, alignedOffcuts[i].OffcutGeometry);
-
-                    // add data to the Offcut
-                    outputOffcuts[i] = cutOffcut;
-                    outputOffcutVol[i] = cutOffcut.GetVolume(0.0001, 0.0001);
-
-                    // output joint data
-                    outputJointVol[i] = display[0].GetVolume(0.0001, 0.0001) * splineCount;
-
-                    for (int j = 0; j < joints.Length; j++)
-                    {
-                        outputJoints[i, j] = display[j];
-                    }
-                }
-
-                else if (i == alignedOffcuts.Count - 1)
-                {
-                    // call CreateJoints method
-                    CreateSplines(alignedOffcuts[i].FirstPlane, jointX, jointY, toolRadius, firstMin, alignedOffcuts[i].Y, alignedOffcuts[i].PositionIndex, splineCount, out Brep[] joints, out Brep[] display);
-
-                    // call CutOffcut method
-                    Brep cutOffcut = Joint.CutOffcut(joints, alignedOffcuts[i].OffcutGeometry);
-
-                    // add data to the Offcut
-                    outputOffcuts[i] = cutOffcut;
-                    outputOffcutVol[i] = cutOffcut.GetVolume(0.0001, 0.0001);
-                }
-
-                else
-                {
-                    // call CreateJoints method for both ends of the Offcuts
-                    CreateSplines(alignedOffcuts[i].FirstPlane, jointX, jointY, toolRadius, firstMin, alignedOffcuts[i].Y, alignedOffcuts[i].PositionIndex, splineCount, out Brep[] firstJoints, out Brep[] firstDisplay);
-                    CreateSplines(alignedOffcuts[i].SecondPlane, jointX, jointY, toolRadius, secondMin, alignedOffcuts[i].Y, alignedOffcuts[i].PositionIndex, splineCount, out Brep[] secondJoints, out Brep[] secondDisplay);
-
-                    // add all joints to one single array
-                    Brep[] cutterBreps = new Brep[splineCount * 2];
-
-                    // output joint data and add joints to brep array
-                    outputJointVol[i] = secondDisplay[0].GetVolume(0.0001, 0.0001) * splineCount;
-
-                    for (int j = 0; j < secondJoints.Length; j++)
-                    {
-                        cutterBreps[j] = firstJoints[j];
-                        cutterBreps[j + splineCount] = secondJoints[j];
-                        outputJoints[i, j] = secondDisplay[j];
-                    }
-
-                    // call CutOffcut method
-                    Brep cutOffcut = Joint.CutOffcut(cutterBreps, alignedOffcuts[i].OffcutGeometry);
-
-                    // add data to the Offcut
-                    outputOffcuts[i] = cutOffcut;
-                    outputOffcutVol[i] = cutOffcut.GetVolume(0.0001, 0.0001);
-                }
-
-                // stop parallel loop
-                if (i >= alignedOffcuts.Count)
-                {
-                    state.Stop();
-                    return;
-                }
-
-                if (state.IsStopped)
-                    return;
-            });
-
-            // output data to new Offcut_GH list
-            List<Offcut_GH> offcutGHList = new List<Offcut_GH>();
-
-            for (int i = 0; i < alignedOffcuts.Count; i++)
-            {
-                Offcut localOffcut = new Offcut(alignedOffcuts[i])
-                {
-                    OffcutGeometry = outputOffcuts[i],
-                    FabVol = outputOffcutVol[i]
-                };
-
-                Offcut_GH offcutGH = new Offcut_GH(localOffcut);
-                offcutGHList.Add(offcutGH);
-            }
+            // run the shared joint pass with the spline cutter
+            JointPass.Run(alignedOffcuts, splineCount,
+                (Plane plane, double[] minValue, Offcut offcut, out Brep[] cutters, out Brep[] display) =>
+                    CreateSplines(plane, jointX, jointY, toolRadius, minValue, offcut.Y, offcut.PositionIndex, splineCount, out cutters, out display),
+                out List<Offcut_GH> offcutGHList, out Brep[,] outputJoints, out double[] outputJointVol);
 
             // access output parameters
             DA.SetDataList(0, offcutGHList);
@@ -196,7 +100,7 @@ namespace SpruceBeetle.Alignment
         //------------------------------------------------------------
         // CreateSplines method
         //------------------------------------------------------------
-        protected void CreateSplines(Plane plane, double jointX, double jointY, double toolRadius, double[] minValue, double yDim, int positionIndex, int splineCount, out Brep[] returnJoint, out Brep[] displayJoint)
+        protected static void CreateSplines(Plane plane, double jointX, double jointY, double toolRadius, double[] minValue, double yDim, int positionIndex, int splineCount, out Brep[] returnJoint, out Brep[] displayJoint)
         {
             // initialise empty brep variable
             returnJoint = new Brep[splineCount];
@@ -358,7 +262,7 @@ namespace SpruceBeetle.Alignment
         public override GH_Exposure Exposure => GH_Exposure.secondary;
 
         // add icon
-        protected override System.Drawing.Bitmap Icon => Properties.Resources._24x24_SplineJoints;
+        protected override System.Drawing.Bitmap Icon => Utility.Icon("24x24_SplineJoints");
 
         // component giud
         public override Guid ComponentGuid => new Guid("A5482B02-5A24-4A18-9BCB-0E0F92C7121C");

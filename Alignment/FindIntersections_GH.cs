@@ -1,4 +1,4 @@
-﻿/*
+/*
  * MIT License
  * 
  * Copyright (c) 2022 Dominik Reisach
@@ -225,7 +225,7 @@ namespace SpruceBeetle.Alignment
         public override GH_Exposure Exposure => GH_Exposure.secondary;
 
         // add icon
-        protected override System.Drawing.Bitmap Icon => Properties.Resources._24x24_FindIntersections;
+        protected override System.Drawing.Bitmap Icon => Utility.Icon("24x24_FindIntersections");
 
         // component giud
         public override Guid ComponentGuid => new Guid("6A455267-5097-446F-97FC-BEEDB5E4724E");

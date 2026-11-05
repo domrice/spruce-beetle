@@ -73,7 +73,7 @@ namespace SpruceBeetle
             if (Value == null)
                 return new Offcut_GH();
             else
-                return new Offcut_GH(Value.Duplicate());
+                return new Offcut_GH(new Offcut(Value));
         }
 
         public static Offcut ParseOffcut(object obj)
@@ -171,7 +171,7 @@ namespace SpruceBeetle
             byte[] brepBytes = GH_Convert.CommonObjectToByteArray(Value.OffcutGeometry);
 
             writer.SetByteArray("ocb", brepBytes);
-            writer.SetDouble("i", Value.Index);
+            writer.SetInt32("idx", Value.Index);
             writer.SetDouble("x", Value.X);
             writer.SetDouble("y", Value.Y);
             writer.SetDouble("z", Value.Z);
@@ -202,7 +202,9 @@ namespace SpruceBeetle
             if (offcutBrep == null)
                 throw new Exception("Failed to convert to Brep!");
 
-            double index = reader.GetDouble("i");
+            // "idx" is the int identity; "i" is the double it used to be, kept so files saved
+            // by an older version still open
+            int index = reader.ItemExists("idx") ? reader.GetInt32("idx") : (int)reader.GetDouble("i");
             double x = reader.GetDouble("x");
             double y = reader.GetDouble("y");
             double z = reader.GetDouble("z");
@@ -230,7 +232,7 @@ namespace SpruceBeetle
             GH_IO.Types.GH_Plane ghmap = reader.GetPlane("map");
             Plane map = new Plane(
                 new Point3d(ghmap.Origin.x, ghmap.Origin.y, ghmap.Origin.z),
-                new Vector3d(ghmap.XAxis.x, ghap.XAxis.y, ghmap.XAxis.z),
+                new Vector3d(ghmap.XAxis.x, ghmap.XAxis.y, ghmap.XAxis.z),
                 new Vector3d(ghmap.YAxis.x, ghmap.YAxis.y, ghmap.YAxis.z));
 
             GH_IO.Types.GH_Plane ghbp = reader.GetPlane("bp");
@@ -241,7 +243,7 @@ namespace SpruceBeetle
 
             int pi = reader.GetInt32("pi");
 
-            Value = Offcut.CreateOffcut(offcutBrep, index, x, y, z, vol, fabvol, fp, sp, ap, map, bp, pi);
+            Value = new Offcut(offcutBrep, index, x, y, z, vol, fabvol, fp, sp, ap, map, bp, pi);
 
             if (Value == null)
                 throw new Exception("Something went wrong down the road :(");

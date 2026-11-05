@@ -1,4 +1,4 @@
-﻿/*
+/*
  * MIT License
  * 
  * Copyright (c) 2022 Dominik Reisach
@@ -42,7 +42,7 @@ namespace SpruceBeetle.Create
         // parameter inputs
         protected override void RegisterInputParams(GH_Component.GH_InputParamManager pManager)
         {
-            pManager.AddNumberParameter("Index", "i", "Index of the Offcut", GH_ParamAccess.list);
+            pManager.AddIntegerParameter("Index", "i", "Index of the Offcut", GH_ParamAccess.list);
             pManager.AddNumberParameter("x-Dimension", "x", "x-Dimension of the Offcut", GH_ParamAccess.list);
             pManager.AddNumberParameter("y-Dimension", "y", "y-Dimension of the Offcut", GH_ParamAccess.list);
             pManager.AddNumberParameter("z-Dimension", "z", "z-Dimension of the Offcut", GH_ParamAccess.list);
@@ -78,7 +78,7 @@ namespace SpruceBeetle.Create
         protected override void SolveInstance(IGH_DataAccess DA)
         {
             // variables to reference the input parameters to
-            List<double> indexList = new List<double>();
+            List<int> indexList = new List<int>();
             List<double> xList = new List<double>();
             List<double> yList = new List<double>();
             List<double> zList = new List<double>();
@@ -138,7 +138,7 @@ namespace SpruceBeetle.Create
         public override GH_Exposure Exposure => GH_Exposure.primary;
 
         // add icon
-        protected override System.Drawing.Bitmap Icon => Properties.Resources._24x24_ConstructOffcut;
+        protected override System.Drawing.Bitmap Icon => Utility.Icon("24x24_ConstructOffcut");
 
         // component giud
         public override Guid ComponentGuid => new Guid("17F06CE5-B12C-48FB-8E00-E35DA303FE52");

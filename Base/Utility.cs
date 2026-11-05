@@ -27,7 +27,6 @@ using System;
 using System.Linq;
 using System.Collections.Generic;
 using Rhino.Geometry;
-using Rhino.Geometry.Intersect;
 
 
 namespace SpruceBeetle
@@ -35,46 +34,97 @@ namespace SpruceBeetle
     public class Utility
     {
         //------------------------------------------------------------
-        // CurveCurvature method
+        // Icon method
         //------------------------------------------------------------
-        public static Interval CurveCurvature(Curve crv)
+        // loads a component icon straight from the embedded PNG stream. going through
+        // Properties.Resources instead would deserialize the bitmap via BinaryFormatter,
+        // which mangles the pixel format under Mono (Rhino on macOS). the copy detaches
+        // the bitmap from the stream (GDI+ needs it open otherwise) and forces 32bppArgb
+        public static System.Drawing.Bitmap Icon(string name)
         {
-            List<double> lengthList = new List<double>();
-
-            double accuracy = 400;
-
-            for (int i = 0; i <= accuracy; i++)
-            {
-                var curvature = crv.CurvatureAt(i * (1 / accuracy));
-                lengthList.Add(curvature.Length);
-            }
-
-            // define interval of the curvature
-            var curvatureMax = lengthList.Max();
-            var curvatureMin = lengthList.Min();
-
-            //// check if curvature is too high
-            //if (CurvatureRadius(crv, curvatureMax) < 0.5)
-            //    throw new Exception("Curvature is too high!");
-            //else if (CurvatureRadius(crv, curvatureMin) < 0.5)
-            //    throw new Exception("Curvature is too high!");
-
-            // create interval
-            Interval curveBounds = new Interval(curvatureMin, curvatureMax);
-
-            return curveBounds;
+            var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+            using (var stream = assembly.GetManifestResourceStream("SpruceBeetle.Resources." + name + ".png"))
+            using (var png = new System.Drawing.Bitmap(stream))
+                return new System.Drawing.Bitmap(png);
         }
 
 
         //------------------------------------------------------------
-        // CurvatureRadius method
+        // CurveCurvature method
         //------------------------------------------------------------
-        private static double CurvatureRadius(Curve crv, double t)
+        public static Interval CurveCurvature(Curve crv)
         {
-            Vector3d curvature = crv.CurvatureAt(t);
-            double curvatureRadius = 1.0 / curvature.Length;
+            const int accuracy = 400;
 
-            return curvatureRadius;
+            // sample over the curve's own domain - callers must not be required to reparameterize
+            List<double> lengthList = new List<double>();
+            for (int i = 0; i <= accuracy; i++)
+                lengthList.Add(crv.CurvatureAt(crv.Domain.ParameterAt((double)i / accuracy)).Length);
+
+            // return the curvature interval
+            return new Interval(lengthList.Min(), lengthList.Max());
+        }
+
+
+        //------------------------------------------------------------
+        // SecondPlaneAt method
+        //------------------------------------------------------------
+        // Frame that closes an Offcut of length Z started at firstPlane. The Offcut is built on
+        // the average of both frames and trimmed by them, so two non-parallel end planes eat
+        // length at the corners: with opening angle a, a corner sitting r to the outside of the
+        // curve costs r * tan(a/2) per end. Usable chord is therefore Z - 2 * r * tan(a/2).
+        // Both terms grow with t, so the residual is monotonic and bisection solves it.
+        // r is the outermost corner of the actual base rectangle, not the half-diagonal: with a
+        // base position other than centred the section sits off-axis, and using the half-diagonal
+        // there under-counts the loss, leaving the outer faces of neighbouring Offcuts stepped.
+        public static Plane SecondPlaneAt(Curve crv, Plane firstPlane, Offcut offcutDim, int ocBaseIndex)
+        {
+            crv.ClosestPoint(firstPlane.Origin, out double lo);
+
+            // away from the centre of curvature; on a straight stretch the angle is zero, so the
+            // fallback value never reaches the result
+            Vector3d outward = -crv.CurvatureAt(lo);
+            Rectangle3d baseRect = Offcut.GetOffcutBase(offcutDim.X, offcutDim.Y, firstPlane, ocBaseIndex);
+
+            double radius = outward.Unitize()
+                ? Enumerable.Range(0, 4).Max(i => (baseRect.Corner(i) - firstPlane.Origin) * outward)
+                : Math.Sqrt(offcutDim.X * offcutDim.X + offcutDim.Y * offcutDim.Y) / 2;
+            double hi = crv.Domain.T1;
+
+            // ponytail: fixed 60 bisection steps rather than a tolerance loop - that is past
+            // double precision on any curve domain. Upgrade path: Brent, if this ever gets hot.
+            for (int i = 0; i < 60; i++)
+            {
+                double mid = (lo + hi) / 2;
+                crv.PerpendicularFrameAt(mid, out Plane frame);
+
+                double angle = Vector3d.VectorAngle(firstPlane.ZAxis, frame.ZAxis);
+                double needed = firstPlane.Origin.DistanceTo(frame.Origin) + 2 * radius * Math.Tan(angle / 2);
+
+                if (needed < offcutDim.Z)
+                    lo = mid;
+                else
+                    hi = mid;
+            }
+
+            crv.PerpendicularFrameAt(lo, out Plane secondPlane);
+            return secondPlane;
+        }
+
+
+        //------------------------------------------------------------
+        // SortedIndices method
+        //------------------------------------------------------------
+        // Positions of the count smallest values, or largest when descending. Sorting the values
+        // and recovering positions with IndexOf hands back the same position twice as soon as two
+        // values are equal - normal for a symmetric intersection - silently dropping one piece and
+        // duplicating another. OrderBy is stable, so ties fall back to the original order.
+        public static List<int> SortedIndices(List<double> values, int count, bool descending = false)
+        {
+            IEnumerable<int> order = Enumerable.Range(0, values.Count);
+
+            return (descending ? order.OrderByDescending(i => values[i]) : order.OrderBy(i => values[i]))
+                .Take(count).ToList();
         }
 
 
@@ -92,463 +142,152 @@ namespace SpruceBeetle
 
 
         //------------------------------------------------------------
-        // GetOptimizedOffcutIndex method
+        // StartPlane method
         //------------------------------------------------------------
-        public static void GetOptimizedOffcutIndex(Curve crv, List<Offcut> offcutDim, List<Plane> initialPlane, Interval angleBounds, out Plane plane, out int index, out double curvature)
+        // Frame the next Offcut starts on: the end frame of the one before it, or - for the very
+        // first Offcut - the frame at the start of the curve, rotated by the start angle.
+        public static Plane StartPlane(Curve crv, List<Plane> previousPlanes, Interval angleBounds)
         {
-            // get first plane
-            Plane firstPlane;
+            if (previousPlanes.Any())
+                return previousPlanes.Last();
 
-            bool isEmpty = !initialPlane.Any();
-            if (isEmpty)
-            {
-                crv.PerpendicularFrameAt(0.0, out firstPlane);
+            crv.PerpendicularFrameAt(crv.Domain.T0, out Plane firstPlane);
 
-                // determine the rotation of the Offcuts
-                double angle = Utility.Remap(0.0, new Interval(0.0, 1.0), angleBounds);
-                firstPlane.Transform(Transform.Rotation(ConvertToRadians(angle), firstPlane.ZAxis, firstPlane.Origin));
-            }
-            else
-                firstPlane = initialPlane.LastOrDefault();
+            double angle = Remap(0.0, new Interval(0.0, 1.0), angleBounds);
+            firstPlane.Transform(Transform.Rotation(ConvertToRadians(angle), firstPlane.ZAxis, firstPlane.Origin));
 
-            // get t value for first plane
-            bool ClosestPt = crv.ClosestPoint(firstPlane.Origin, out double tClosest);
+            return firstPlane;
+        }
 
-            // call CurveCurvature method
-            Interval curveBounds = CurveCurvature(crv);
 
-            // append all Z values to a list
-            List<double> dzList = new List<double>();
-            for (int i = 0; i < offcutDim.Count; i++)
-                dzList.Add(offcutDim[i].Z);
-
-            // define interval of the Offcuts' Z values
+        //------------------------------------------------------------
+        // CurvatureIndex method
+        //------------------------------------------------------------
+        // Position of the Offcut whose length best matches the curvature at t: the tightest spot
+        // on the curve maps to the shortest Offcut, the straightest to the longest.
+        public static int CurvatureIndex(Curve crv, Interval curveBounds, List<Offcut> offcutDim, double t)
+        {
+            List<double> dzList = offcutDim.Select(oc => oc.Z).ToList();
             Interval dBounds = new Interval(dzList.Max(), dzList.Min());
 
-            // curvature vector at t
-            Vector3d targetVector = crv.CurvatureAt(tClosest);
-
-            // call Remap method to remap the Z values
-            double newValue = Remap(targetVector.Length, curveBounds, dBounds);
-
-            // match new value and closest Z value
+            double newValue = Remap(crv.CurvatureAt(t).Length, curveBounds, dBounds);
             double closestNum = dzList.Aggregate((x, y) => Math.Abs(x - newValue) < Math.Abs(y - newValue) ? x : y);
-            int offcutIndex = dzList.IndexOf(closestNum);
 
-            // remap maximum curvature value to a set range -----> perhaps needs rethinking? matching to eurocode for double-curved glulam?
-            Interval maxRange = new Interval(10, 0);
-            Interval targetRange = new Interval(0.63, 0.830);
-
-            double maxCurvature = Remap(curveBounds.T1, maxRange, targetRange);
-
-            // remap the curvature to the adjusted values
-            Interval planeAdjustment = new Interval(maxCurvature + 0.114, maxCurvature);
-            double curvatureValue = Remap(targetVector.Length, curveBounds, planeAdjustment);
-
-            // assign return values
-            plane = firstPlane;
-            index = offcutIndex;
-            curvature = curvatureValue;
+            return dzList.IndexOf(closestNum);
         }
 
 
         //------------------------------------------------------------
-        // GetOffcutIndex method
+        // Placement type
         //------------------------------------------------------------
-        public static void GetOffcutIndex(Curve crv, List<Plane> initialPlane, Interval angleBounds, out Plane plane, out double curvature)
+        // One placed Offcut and the four frames that describe it. Returned as a whole so callers
+        // stop indexing a List<Plane> by positional convention.
+        public class Placement
         {
-            // reparameterize curve
-            Interval reparam = new Interval(0.0, 1.0);
-            crv.Domain = reparam;
-
-            // get first plane
-            Plane firstPlane;
-
-            bool isEmpty = !initialPlane.Any();
-            if (isEmpty)
-            {
-                crv.PerpendicularFrameAt(0.0, out firstPlane);
-
-                // determine the rotation of the Offcuts
-                double angle = Utility.Remap(0.0, new Interval(0.0, 1.0), angleBounds);
-                firstPlane.Transform(Transform.Rotation(ConvertToRadians(angle), firstPlane.ZAxis, firstPlane.Origin));
-            }
-            else
-                firstPlane = initialPlane.LastOrDefault();
-
-            // get t value for first plane
-            crv.ClosestPoint(firstPlane.Origin, out double tClosest);
-
-            // call CurveCurvature method
-            Interval curveBounds = CurveCurvature(crv);
-
-            // curvature vector at t
-            Vector3d targetVector = crv.CurvatureAt(tClosest);
-
-            // remap maximum curvature value to a set range -----> perhaps needs rethinking? matching to eurocode for double-curved glulam?
-            Interval maxRange = new Interval(10, 0);
-            Interval targetRange = new Interval(0.600, 0.800);
-
-            double maxCurvature = Remap(curveBounds.T1, maxRange, targetRange);
-
-            // remap the curvature to the adjusted values
-            Interval planeAdjustment = new Interval(maxCurvature + 0.114, maxCurvature);
-            double curvatureValue = Remap(targetVector.Length, curveBounds, planeAdjustment);
-
-            // assign return values
-            plane = firstPlane;
-            curvature = curvatureValue;
+            public Brep Geometry;
+            public Plane FirstPlane;
+            public Plane SecondPlane;
+            public Plane AveragePlane;
+            public Plane MovedAveragePlane;
+            public double Volume;
         }
 
 
         //------------------------------------------------------------
-        // GetOptimizedLinearIndex method
+        // PlaceOffcut method
         //------------------------------------------------------------
-        public static void GetOptimizedLinearIndex(Curve crv, List<Offcut> offcutDim, List<Plane> initialPlane, Interval angleBounds, out Plane plane, out int offcutIndex)
-        {
-            // reparameterize curve
-            Interval reparam = new Interval(0.0, 1.0);
-            crv.Domain = reparam;
-
-            // get first plane
-            Plane firstPlane;
-
-            bool isEmpty = !initialPlane.Any();
-            if (isEmpty)
-            {
-                crv.PerpendicularFrameAt(0.0, out firstPlane);
-
-                // determine the rotation of the Offcuts
-                double angle = Utility.Remap(0.0, new Interval(0.0, 1.0), angleBounds);
-                firstPlane.Transform(Transform.Rotation(ConvertToRadians(angle), firstPlane.ZAxis, firstPlane.Origin));
-            }
-            else
-                firstPlane = initialPlane.LastOrDefault();
-
-            // get t value for first plane
-            crv.ClosestPoint(firstPlane.Origin, out double tClosest);
-
-            // append all Z values to a list
-            List<double> dzList = new List<double>();
-            for (int i = 0; i < offcutDim.Count; i++)
-                dzList.Add(offcutDim[i].Z);
-
-            // return values
-            plane = firstPlane;
-            offcutIndex = dzList.IndexOf(dzList.Max());
-        }
-
-
-        //------------------------------------------------------------
-        // GetLinearOffcutIndex method
-        //------------------------------------------------------------
-        public static void GetLinearOffcutIndex(Curve crv, List<Plane> initialPlane, Interval angleBounds, out Plane plane)
-        {
-            // reparameterize curve
-            Interval reparam = new Interval(0.0, 1.0);
-            crv.Domain = reparam;
-
-            // get first plane
-            Plane firstPlane;
-
-            bool isEmpty = !initialPlane.Any();
-            if (isEmpty)
-            {
-                crv.PerpendicularFrameAt(0.0, out firstPlane);
-
-                // determine the rotation of the Offcuts
-                double angle = Utility.Remap(0.0, new Interval(0.0, 1.0), angleBounds);
-                firstPlane.Transform(Transform.Rotation(ConvertToRadians(angle), firstPlane.ZAxis, firstPlane.Origin));
-            }
-            else
-                firstPlane = initialPlane.LastOrDefault();
-
-            // get t value for first plane
-            crv.ClosestPoint(firstPlane.Origin, out double tClosest);
-
-            // return plane
-            plane = firstPlane;
-        }
-
-
-        //------------------------------------------------------------
-        // TestAlignment method
-        //------------------------------------------------------------
-        public static void TestAlignment(Curve crv, Offcut offcutDim, Plane firstPlane, double adjustmentVal, bool end, out List<Plane> planes)
+        // Builds the Offcut box on the average of its two end frames. trim cuts it back to those
+        // frames; on a straight curve the intermediate Offcuts already meet flush, so only the
+        // closing one needs it.
+        public static Placement PlaceOffcut(Curve crv, Offcut offcutDim, Plane firstPlane, double angle, int ocBaseIndex, bool end, bool trim)
         {
             Plane secondPlane;
 
-            if (!end)
-            {
-                // create sphere to intersect with curve; the sphere has to be a bit smaller than the Z value
-                Brep sphere = new Sphere(firstPlane.Origin, offcutDim.Z * adjustmentVal).ToBrep();
-                Intersection.CurveBrep(crv, sphere, 0.0001, out _, out Point3d[] intersectionPts);
-                crv.ClosestPoint(intersectionPts.Last(), out double tIntersect);
-
-                // create second plane on curve
-                crv.PerpendicularFrameAt(tIntersect, out secondPlane);
-            }
-            else
-                crv.PerpendicularFrameAt(1, out secondPlane);
-
-            // add planes to a list
-            List<Plane> planeList = new List<Plane>
-            {
-                firstPlane,
-                secondPlane,
-            };
-
-            // assign return values
-            planes = planeList;
-        }
-
-
-        //------------------------------------------------------------
-        // AlignOffcuts method
-        //------------------------------------------------------------
-        public static void AlignOffcuts(Curve crv, Offcut offcutDim, Plane firstPlane, double adjustmentVal, double angle, int ocBaseIndex, bool end, out Brep offcut, out List<Plane> planes, out double vol)
-        {
-            Plane secondPlane;
-            
-            if (!end)
-            {
-                // create sphere to intersect with curve; the sphere has to be a bit smaller than the Z value
-                Brep sphere = new Sphere(firstPlane.Origin, offcutDim.Z * adjustmentVal).ToBrep();
-                Intersection.CurveBrep(crv, sphere, 0.0001, out _, out Point3d[] intersectionPts);
-                crv.ClosestPoint(intersectionPts.Last(), out double tIntersect);
-
-                // create second plane on curve
-                crv.PerpendicularFrameAt(tIntersect, out secondPlane);
-            }
-            else
-                crv.PerpendicularFrameAt(1, out secondPlane);
-
-            // determine the rotation of the Offcuts
-            secondPlane.Transform(Transform.Rotation(ConvertToRadians(angle), secondPlane.ZAxis, secondPlane.Origin));
-
-            // create average plane out of the first and second one
-            Point3d originPt = new Point3d((firstPlane.Origin + secondPlane.Origin) / 2);
-            Plane averagePlane = new Plane(originPt, (firstPlane.XAxis + secondPlane.XAxis) / 2, (firstPlane.YAxis + secondPlane.YAxis) / 2);
-
-            // copy average plane and move to the center of the to be constructed Offcut - it is needed for further operations
-            Plane movedAvrgPlane = new Plane(averagePlane);
-            Rectangle3d avrgPosition = Offcut.GetOffcutBase(offcutDim.X, offcutDim.Y, averagePlane, ocBaseIndex);
-
-            movedAvrgPlane.Origin = avrgPosition.Center;
-
-            // add planes to a list
-            List<Plane> planeList = new List<Plane>
-            {
-                firstPlane,
-                secondPlane,
-                averagePlane,
-                movedAvrgPlane
-            };
-
-            // call CreateOffcutBrep method
-            Brep unionOffcuts = Offcut.CreateOffcutBrep(offcutDim, averagePlane, ocBaseIndex);
-
-            // trim Offcut for optimal alignment
-            firstPlane.Flip();
-
-            Brep firstTrim = unionOffcuts.Trim(firstPlane, 0.0001)[0];
-            Brep firstCap = firstTrim.CapPlanarHoles(0.0001);
-            Brep secondTrim = firstCap.Trim(secondPlane, 0.0001)[0];
-
-            firstPlane.Flip();
-
-            // cap holes and split kinky faces
-            Brep outputOffcut = secondTrim.CapPlanarHoles(0.0001);
-            outputOffcut.Faces.SplitKinkyFaces(0.0001);
-
-            // assign return values
-            offcut = outputOffcut;
-            planes = planeList;
-            vol = outputOffcut.GetVolume();
-        }
-
-
-        //------------------------------------------------------------
-        // LinearAlignment method
-        //------------------------------------------------------------
-        public static void LinearAlignment(Curve crv, Offcut offcutDim, Plane firstPlane, double angle, int ocBaseIndex, bool end, out Brep offcut, out List<Plane> planes, out double vol)
-        {
-            Plane secondPlane;
-
-            if (!end)
-            {
-                // create sphere to intersect with curve; the sphere has to be a bit smaller than the Z value
-                Brep sphere = new Sphere(firstPlane.Origin, offcutDim.Z).ToBrep();
-                Intersection.CurveBrep(crv, sphere, 0.0001, out _, out Point3d[] intersectionPts);
-                crv.ClosestPoint(intersectionPts.Last(), out double tIntersect);
-
-                // create second plane on curve
-                crv.PerpendicularFrameAt(tIntersect, out secondPlane);
-            }
-            else
-                crv.PerpendicularFrameAt(1, out secondPlane);
-
-            // determine the rotation of the Offcuts
-            secondPlane.Transform(Transform.Rotation(ConvertToRadians(angle), secondPlane.ZAxis, secondPlane.Origin));
-
-            // create average plane out of the first and second one
-            Point3d originPt = new Point3d((firstPlane.Origin + secondPlane.Origin) / 2);
-            Plane averagePlane = new Plane(originPt, (firstPlane.XAxis + secondPlane.XAxis) / 2, (firstPlane.YAxis + secondPlane.YAxis) / 2);
-
-            // copy average plane and move to the center of the to be constructed Offcut - it is needed for further operations
-            Plane movedAvrgPlane = new Plane(averagePlane);
-            Rectangle3d avrgPosition = Offcut.GetOffcutBase(offcutDim.X, offcutDim.Y, averagePlane, ocBaseIndex);
-
-            movedAvrgPlane.Origin = avrgPosition.Center;
-
-            // add planes to a list
-            List<Plane> planeList = new List<Plane>
-            {
-                firstPlane,
-                secondPlane,
-                averagePlane,
-                movedAvrgPlane
-            };
-
-            // call CreateOffcutBrep method
-            Brep unionOffcuts = Offcut.CreateOffcutBrep(offcutDim, averagePlane, ocBaseIndex);
-
-            // check if end of curve is reached since the last Offcut has to be trimmed
             if (end)
-            {
-                // trim Offcut for optimal alignment
-                firstPlane.Flip();
-
-                Brep firstTrim = unionOffcuts.Trim(firstPlane, 0.0001)[0];
-                Brep firstCap = firstTrim.CapPlanarHoles(0.0001);
-                Brep secondTrim = firstCap.Trim(secondPlane, 0.0001)[0];
-
-                firstPlane.Flip();
-
-                // cap holes and split kinky faces
-                Brep outputOffcut = secondTrim.CapPlanarHoles(0.0001);
-                outputOffcut.Faces.SplitKinkyFaces(0.0001);
-
-                // assign return values
-                offcut = outputOffcut;
-                planes = planeList;
-                vol = outputOffcut.GetVolume();
-            }
+                crv.PerpendicularFrameAt(crv.Domain.T1, out secondPlane);
             else
-            {
-                // assign return values
-                offcut = unionOffcuts;
-                planes = planeList;
-                vol = unionOffcuts.GetVolume();
-            }
+                secondPlane = SecondPlaneAt(crv, firstPlane, offcutDim, ocBaseIndex);
 
-        }
-
-
-        //------------------------------------------------------------
-        // DirectlyAlignOffcuts method
-        //------------------------------------------------------------
-        public static void DirectlyAlignOffcuts(Curve crv, Offcut offcutDim, Plane initialPlane, double adjustmentVal, double angle, int ocBaseIndex, int i, bool end, out Brep offcut, out List<Plane> planes, out double vol)
-        {
-            // initialise new Plane
-            Plane firstPlane;
-            
-            if (i == 0)
-            {
-                firstPlane = initialPlane;
-            }
-            else
-            {
-                // create sphere to intersect with curve; the first intersection point will be the base for the next Offcut
-                Brep firstSphere = new Sphere(initialPlane.Origin, 0.03).ToBrep();
-                Intersection.CurveBrep(crv, firstSphere, 0.0001, out _, out Point3d[] firstIntPts);
-                crv.ClosestPoint(firstIntPts[0], out double tFIntersect);
-
-                // create first plane on curve
-                crv.PerpendicularFrameAt(tFIntersect, out firstPlane);
-            }
-
-            Plane secondPlane;
-
-            if (!end)
-            {
-                // create sphere to intersect with curve; the sphere has to be a bit smaller than the Z value
-                Brep secondSphere = new Sphere(firstPlane.Origin, offcutDim.Z * adjustmentVal).ToBrep();
-                Intersection.CurveBrep(crv, secondSphere, 0.0001, out _, out Point3d[] secondIntPts);
-                crv.ClosestPoint(secondIntPts.Last(), out double tSIntersect);
-
-                // create second plane on curve
-                crv.PerpendicularFrameAt(tSIntersect, out secondPlane);
-            }
-            else
-                crv.PerpendicularFrameAt(1.0, out secondPlane);
-
-
-            // determine the orientation of the Offcuts
-            firstPlane.Transform(Transform.Rotation(ConvertToRadians(angle), firstPlane.ZAxis, firstPlane.Origin));
+            // determine the rotation of the Offcuts
             secondPlane.Transform(Transform.Rotation(ConvertToRadians(angle), secondPlane.ZAxis, secondPlane.Origin));
 
             // create average plane out of the first and second one
             Point3d originPt = new Point3d((firstPlane.Origin + secondPlane.Origin) / 2);
             Plane averagePlane = new Plane(originPt, (firstPlane.XAxis + secondPlane.XAxis) / 2, (firstPlane.YAxis + secondPlane.YAxis) / 2);
 
-            // call CreateOffcutBrep method
-            Brep unionOffcuts = Offcut.CreateOffcutBrep(offcutDim, averagePlane, ocBaseIndex);
-
-            // trim Offcut for optimal alignment
-            firstPlane.Flip();
-
-            Brep firstTrim = unionOffcuts.Trim(firstPlane, 0.0001)[0];
-            Brep firstCap = firstTrim.CapPlanarHoles(0.0001);
-            Brep secondTrim = firstCap.Trim(secondPlane, 0.0001)[0];
-
-            firstPlane.Flip();
-
-            // cap holes and split kinky faces
-            Brep outputOffcut = secondTrim.CapPlanarHoles(0.0001);
-            outputOffcut.Faces.SplitKinkyFaces(0.0001);
-
-            // first average plane
-            Point3d firstOrigin = new Point3d((firstPlane.Origin + initialPlane.Origin) / 2);
-            Plane firstAvrgPlane = new Plane(firstOrigin, (firstPlane.XAxis + initialPlane.XAxis) / 2, (firstPlane.YAxis + initialPlane.YAxis) / 2);
-
-            // second average plane
-            Brep secSphere = new Sphere(secondPlane.Origin, 0.03).ToBrep();
-            Intersection.CurveBrep(crv, secSphere, 0.0001, out _, out Point3d[] secIntPts);
-            crv.ClosestPoint(secIntPts[0], out double tSecIntersect);
-
-            // create first plane on curve
-            crv.PerpendicularFrameAt(tSecIntersect, out Plane movedSecondPlane);
-
-            // rotate movedSecondPlane
-            movedSecondPlane.Transform(Transform.Rotation(ConvertToRadians(angle), movedSecondPlane.ZAxis, movedSecondPlane.Origin));
-
-            Point3d secondOrigin = new Point3d((movedSecondPlane.Origin + secondPlane.Origin) / 2);
-            Plane secondAvrgPlane = new Plane(secondOrigin, (movedSecondPlane.XAxis + secondPlane.XAxis) / 2, (movedSecondPlane.YAxis + secondPlane.YAxis) / 2);
-
             // copy average plane and move to the center of the to be constructed Offcut - it is needed for further operations
-            Plane movedAvrgPlane = new Plane(averagePlane);
-            Rectangle3d avrgPosition = Offcut.GetOffcutBase(offcutDim.X, offcutDim.Y, averagePlane, ocBaseIndex);
-
-            movedAvrgPlane.Origin = avrgPosition.Center;
-
-            // add planes to a list
-            List<Plane> planeList = new List<Plane>
+            Plane movedAvrgPlane = new Plane(averagePlane)
             {
-                initialPlane,
-                firstPlane,
-                secondPlane,
-                movedSecondPlane,
-                averagePlane,
-                firstAvrgPlane,
-                secondAvrgPlane,
-                movedAvrgPlane
+                Origin = Offcut.GetOffcutBase(offcutDim.X, offcutDim.Y, averagePlane, ocBaseIndex).Center
             };
 
-            // assign return values
-            offcut = outputOffcut;
-            planes = planeList;
-            vol = outputOffcut.GetVolume();
+            Brep offcut = Offcut.CreateOffcutBrep(offcutDim, averagePlane, ocBaseIndex);
+
+            if (trim)
+            {
+                firstPlane.Flip();
+                Brep firstCap = offcut.Trim(firstPlane, 0.0001)[0].CapPlanarHoles(0.0001);
+                firstPlane.Flip();
+
+                offcut = firstCap.Trim(secondPlane, 0.0001)[0].CapPlanarHoles(0.0001);
+                offcut.Faces.SplitKinkyFaces(0.0001);
+            }
+
+            return new Placement
+            {
+                Geometry = offcut,
+                FirstPlane = firstPlane,
+                SecondPlane = secondPlane,
+                AveragePlane = averagePlane,
+                MovedAveragePlane = movedAvrgPlane,
+                Volume = offcut.GetVolume()
+            };
+        }
+
+
+        //------------------------------------------------------------
+        // TrimWaste method
+        //------------------------------------------------------------
+        // Material lost trimming the placed Offcuts back to their end planes. Vol is the nominal
+        // X * Y * Z of the stock piece, FabVol the volume that survived the trim, so the
+        // difference is what the two non-parallel end cuts took off. Unused Offcuts are not waste
+        // - they go back to the inventory - so they are not counted here.
+        public static double TrimWaste(IEnumerable<Offcut> placed)
+        {
+            return placed.Sum(oc => oc.Vol - oc.FabVol);
+        }
+
+
+        //------------------------------------------------------------
+        // CurveExitsOffcut method
+        //------------------------------------------------------------
+        // True when the curve leaves the placed Offcut. The Offcut is a straight box trimmed at
+        // two end planes, so on a tight enough radius the curve bows out through its side: the
+        // geometry is still valid, and still wrong. Testing the sampled curve against the placed
+        // Brep catches this for every base position, not just the centred one, and needs no
+        // tolerance constant of its own.
+        // ponytail: 9 samples between the two end planes. Deviation peaks at the middle and is
+        // monotonic either side of it, so a coarse sample cannot miss a real excursion by much.
+        // Upgrade path: bisect towards the peak if a near-miss ever has to be caught exactly.
+        public static bool CurveExitsOffcut(Curve crv, Offcut offcut)
+        {
+            const int samples = 9;
+
+            if (offcut.OffcutGeometry == null || !offcut.OffcutGeometry.IsSolid)
+                return false;
+
+            crv.ClosestPoint(offcut.FirstPlane.Origin, out double t0);
+            crv.ClosestPoint(offcut.SecondPlane.Origin, out double t1);
+
+            for (int i = 1; i < samples; i++)
+            {
+                Point3d pt = crv.PointAt(t0 + (t1 - t0) * i / samples);
+
+                if (!offcut.OffcutGeometry.IsPointInside(pt, 0.0001, true))
+                    return true;
+            }
+
+            return false;
         }
 
 

@@ -1,4 +1,4 @@
-﻿/*
+/*
  * MIT License
  * 
  * Copyright (c) 2022 Dominik Reisach
@@ -80,20 +80,9 @@ namespace SpruceBeetle.Alignment
             Brep[] trimmedOffcuts = new Brep[offcutList.Count];
 
             // parallel computed intersection
-            System.Threading.Tasks.Parallel.For(0, offcutList.Count, (i, state) =>
+            System.Threading.Tasks.Parallel.For(0, offcutList.Count, i =>
             {
-                Brep trimmedOffcut = OffcutIntersection(offcutList[i].OffcutGeometry, minShape);
-                trimmedOffcuts[i] = trimmedOffcut;
-
-                // stop parallel loop
-                if (i >= offcutList.Count)
-                {
-                    state.Stop();
-                    return;
-                }
-
-                if (state.IsStopped)
-                    return;
+                trimmedOffcuts[i] = OffcutIntersection(offcutList[i].OffcutGeometry, minShape);
             });
 
             // output data to new Offcut_GH list
@@ -238,7 +227,7 @@ namespace SpruceBeetle.Alignment
         public override GH_Exposure Exposure => GH_Exposure.primary;
 
         // add icon
-        protected override System.Drawing.Bitmap Icon => Properties.Resources._24x24_Unification;
+        protected override System.Drawing.Bitmap Icon => Utility.Icon("24x24_Unification");
 
         // component giud
         public override Guid ComponentGuid => new Guid("154DE293-E401-4190-AC9C-6225BA2726E0");

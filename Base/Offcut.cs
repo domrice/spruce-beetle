@@ -24,6 +24,7 @@
 
 
 using System.Collections.Generic;
+using System.Linq;
 using Rhino.Geometry;
 
 
@@ -32,7 +33,7 @@ namespace SpruceBeetle
     public class Offcut
     {
         public Brep OffcutGeometry { get; set; }
-        public double Index { get; set; }
+        public int Index { get; set; }
         public double X { get; set; }
         public double Y { get; set; }
         public double Z { get; set; }
@@ -50,7 +51,8 @@ namespace SpruceBeetle
         // Offcut constructors
         //------------------------------------------------------------
 
-        // constructor with no argument
+        // constructor with no argument - kept for Newtonsoft, which deserializes
+        // List<Offcut> in JSONOffcut_GH
         protected Offcut() {}
 
         // constructor with offcut
@@ -72,7 +74,7 @@ namespace SpruceBeetle
         }
 
         // constructor with index and dimensions
-        public Offcut(double index, double x, double y, double z)
+        public Offcut(int index, double x, double y, double z)
         {
             Index = index;
             X = x;
@@ -82,7 +84,7 @@ namespace SpruceBeetle
         }
 
         // constructor with all data
-        public Offcut (Brep offcut, double index, double x, double y, double z, double vol, double fabvol, Plane fp, Plane sp, Plane ap, Plane map, Plane bp, int pi)
+        public Offcut (Brep offcut, int index, double x, double y, double z, double vol, double fabvol, Plane fp, Plane sp, Plane ap, Plane map, Plane bp, int pi)
         {
             OffcutGeometry = offcut;
             Index = index;
@@ -97,25 +99,6 @@ namespace SpruceBeetle
             MovedAveragePlane = map;
             BasePlane = bp;
             PositionIndex = pi;
-        }
-
-
-        //------------------------------------------------------------
-        // CreateOffcut methods
-        //------------------------------------------------------------
-        public static Offcut CreateOffcut(Brep offcut, double index, double x, double y, double z, double vol, double fabvol, Plane fp, Plane sp, Plane ap, Plane map, Plane bp, int pi)
-        {
-            Offcut createdOffcut = new Offcut(offcut, index, x, y, z, vol, fabvol, fp, sp, ap, map, bp, pi);
-            
-            return createdOffcut;
-        }
-
-
-        public static Offcut CreateOffcutFromData(double index, double x, double y, double z)
-        {
-            Offcut createdOffcut = new Offcut(index, x, y, z);
-
-            return createdOffcut;
         }
 
 
@@ -137,31 +120,6 @@ namespace SpruceBeetle
             return basePlane;
         }
 
-
-        //------------------------------------------------------------
-        // Duplicate method
-        //------------------------------------------------------------
-        public Offcut Duplicate()
-        {
-            Offcut offcut = new Offcut
-            {
-                OffcutGeometry = OffcutGeometry,
-                Index = Index,
-                X = X,
-                Y = Y,
-                Z = Z,
-                Vol = Vol,
-                FabVol = FabVol,
-                FirstPlane = FirstPlane,
-                SecondPlane = SecondPlane,
-                AveragePlane = AveragePlane,
-                MovedAveragePlane = MovedAveragePlane,
-                BasePlane = BasePlane,
-                PositionIndex = PositionIndex
-            };
-
-            return offcut;
-        }
 
         //------------------------------------------------------------
         // GetOffcutBase method
@@ -288,8 +246,10 @@ namespace SpruceBeetle
 
 
         //------------------------------------------------------------
-        // List of Offcut base orientations as reference
+        // Offcut base orientations
         //------------------------------------------------------------
+        // The one place the orientations are named. Position in this list is the index
+        // GetOffcutBase switches on, so the order is not cosmetic.
         public static List<string> BasePosition()
         {
             return new List<string>
@@ -307,25 +267,11 @@ namespace SpruceBeetle
         }
 
 
-        //------------------------------------------------------------
-        // Dictionary of Offcut base orientations
-        //------------------------------------------------------------
+        // The same list as a name -> index lookup
         public static Dictionary<string, int> GetBasePosition()
         {
-            Dictionary<string, int> baseOrientation = new Dictionary<string, int>
-            {
-                { "mid-mid", 0 },
-                { "mid-top", 1 },
-                { "mid-bottom", 2 },
-                { "right-mid", 3 },
-                { "left-mid", 4 },
-                { "right-top", 5 },
-                { "right-bottom", 6 },
-                { "left-bottom", 7 },
-                { "left-top", 8 }
-            };
-
-            return baseOrientation;
+            return BasePosition().Select((name, index) => new { name, index })
+                .ToDictionary(entry => entry.name, entry => entry.index);
         }
     }
 }

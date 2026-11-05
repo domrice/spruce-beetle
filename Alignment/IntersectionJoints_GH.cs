@@ -1,4 +1,4 @@
-﻿/*
+/*
  * MIT License
  * 
  * Copyright (c) 2022 Dominik Reisach
@@ -51,7 +51,7 @@ namespace SpruceBeetle.Alignment
             pManager.AddPointParameter("Intersection Point", "IP", "Intersection point between the two alignments", GH_ParamAccess.item);
             pManager.AddNumberParameter("Rotate Joint", "RJ", "Rotate the joint to alter its direction", GH_ParamAccess.item, 0.0);
             pManager.AddNumberParameter("Width", "W", "The width of the lap joint", GH_ParamAccess.item, 1.0);
-            pManager.AddIntegerParameter("Joint Type", "JT", "Adds the specified joint type: 0 = spline joint, 1 = cross-lap joint", GH_ParamAccess.item, 1);
+            pManager.AddIntegerParameter("Joint Type", "JT", "Adds the specified joint type: 0 = pass-through joint, 1 = cross-lap joint", GH_ParamAccess.item, 1);
 
             for (int i = 0; i < pManager.ParamCount; i++)
                 pManager[i].WireDisplay = GH_ParamWireDisplay.faint;
@@ -91,51 +91,11 @@ namespace SpruceBeetle.Alignment
             // initialise data trees and paths
             DataTree<Offcut_GH> offcutGHList = new DataTree<Offcut_GH>();
             DataTree<Offcut_GH> intOffcutGHList = new DataTree<Offcut_GH>();
-            List<Brep> joints = new List<Brep>();
             GH_Path firstPath = new GH_Path(0);
             GH_Path secondPath = new GH_Path(1);
 
             switch (jointType)
             {
-                // spline joint
-                case 0:
-                    {                   
-                        // call GetCuttingPlanes method
-                        GetCuttingPlanes(firstOffcuts, intPt, angle, out _, out Offcut firstOffcut, out _);
-                        GetCuttingPlanes(secondOffcuts, intPt, angle, out List<int> secondIndices, out _, out _);
-
-                        // create Cutter geometry through scaling the closest brep
-                        Brep offcutCutter = firstOffcut.OffcutGeometry.DuplicateBrep();
-                        offcutCutter.Transform(Transform.Scale(firstOffcut.AveragePlane, 2, width, 4));
-
-                        // call CreateIntersectionJoint method
-                        CreateIntersectionJoint(offcutCutter, secondOffcuts, secondIndices, out List<Offcut> secondOffcutList, out List<Offcut> secondIntOffcuts);
-
-                        // call GetSplineBase method
-                        GetSplineBase(Utility.GetOffcutBaseCurve(secondOffcuts), secondIntOffcuts, intPt, out List<Plane> basePlanes, out List<Offcut> intOffcuts);
-
-                        //// call CreateIntersectionSpline method
-                        //for (int i = 0; i < basePlanes.Count; i++)
-                        //{
-                        //    CreateIntersectionSpline(basePlanes[i], intOffcuts[i], out Brep cutter, out Brep display);
-                        //    joints.Add(cutter);
-                        //    joints.Add(display);
-                        //}
-
-                        // add all Offcuts to the respective data tree
-                        for (int i = 0; i < firstOffcuts.Count; i++)
-                            offcutGHList.Add(new Offcut_GH(firstOffcuts[i]), firstPath);
-
-                        for (int i = 0; i < secondOffcutList.Count; i++)
-                            offcutGHList.Add(new Offcut_GH(secondOffcutList[i]), secondPath);
-
-                        for (int i = 0; i < secondIntOffcuts.Count; i++)
-                        {
-                            intOffcutGHList.Add(new Offcut_GH(secondIntOffcuts[i]), secondPath);
-                        }
-                    }
-                    break;
-
                 // cross-lap joint
                 case 1:
                     {
@@ -166,14 +126,16 @@ namespace SpruceBeetle.Alignment
                         for (int i = 0; i < secondOffcutList.Count; i++)
                             offcutGHList.Add(new Offcut_GH(secondOffcutList[i]), secondPath);
 
+                        // the two lists are the same length unless a cut failed, so walk them apart
                         for (int i = 0; i < firstIntOffcuts.Count; i++)
-                        {
                             intOffcutGHList.Add(new Offcut_GH(firstIntOffcuts[i]), firstPath);
+
+                        for (int i = 0; i < secondIntOffcuts.Count; i++)
                             intOffcutGHList.Add(new Offcut_GH(secondIntOffcuts[i]), secondPath);
-                        }
                     }
                     break;
 
+                // pass-through joint: the second alignment is cut by the geometry of the first
                 default:
                     {
                         // call GetCuttingPlanes method
@@ -187,17 +149,6 @@ namespace SpruceBeetle.Alignment
                         // call CreateIntersectionJoint method
                         CreateIntersectionJoint(offcutCutter, secondOffcuts, secondIndices, out List<Offcut> secondOffcutList, out List<Offcut> secondIntOffcuts);
 
-                        // call GetSplineBase method
-                        GetSplineBase(Utility.GetOffcutBaseCurve(secondOffcuts), secondIntOffcuts, intPt, out List<Plane> basePlanes, out List<Offcut> intOffcuts);
-
-                        //// call CreateIntersectionSpline method
-                        //for (int i = 0; i < basePlanes.Count; i++)
-                        //{
-                        //    CreateIntersectionSpline(basePlanes[i], intOffcuts[i], out Brep cutter, out Brep display);
-                        //    joints.Add(cutter);
-                        //    joints.Add(display);
-                        //}
-
                         // add all Offcuts to the respective data tree
                         for (int i = 0; i < firstOffcuts.Count; i++)
                             offcutGHList.Add(new Offcut_GH(firstOffcuts[i]), firstPath);
@@ -206,9 +157,7 @@ namespace SpruceBeetle.Alignment
                             offcutGHList.Add(new Offcut_GH(secondOffcutList[i]), secondPath);
 
                         for (int i = 0; i < secondIntOffcuts.Count; i++)
-                        {
                             intOffcutGHList.Add(new Offcut_GH(secondIntOffcuts[i]), secondPath);
-                        }
                     }
                     break;
             }
@@ -220,204 +169,48 @@ namespace SpruceBeetle.Alignment
 
 
         //------------------------------------------------------------
-        // CreateIntersectionSpline method
-        //------------------------------------------------------------
-        protected void CreateIntersectionSpline(Plane plane, Offcut intOffcut, out Brep cutter, out Brep display)
-        {
-            // initialise new plane
-            Plane basePlane = new Plane(plane);
-
-            // joint dimensions
-            Interval dX = new Interval(-0.025 / 2, 0.025 / 2);
-            Interval dY = new Interval(-0.05 / 2, 0.05 / 2);
-            double dZ = intOffcut.X * 2;
-
-            // rotate base plane
-            double angle = Utility.ConvertToRadians(90);
-            basePlane.Rotate(angle, basePlane.YAxis, basePlane.Origin);
-            basePlane.Rotate(angle, basePlane.ZAxis, basePlane.Origin);
-
-            // move basePlane for centered extrusion
-            basePlane.Transform(Transform.Translation(basePlane.ZAxis * intOffcut.X));
-
-            // create rectangle
-            Rectangle3d baseRect = new Rectangle3d(basePlane, dX, dY);
-            Curve baseCurve = SplineJoints_GH.DovetailRect(baseRect, basePlane, 0.006);
-
-            // extrude first base to create first joint
-            cutter = Extrusion.Create(baseCurve, -dZ, true).ToBrep();
-
-            // cutter clean-up
-            cutter.Faces.SplitKinkyFaces(0.0001);
-            if (BrepSolidOrientation.Inward == cutter.SolidOrientation)
-                cutter.Flip();
-
-            // create display joints
-            basePlane.Transform(Transform.Translation(basePlane.ZAxis * -intOffcut.X / 2));
-            display = Extrusion.Create(SplineJoints_GH.DovetailRect(new Rectangle3d(basePlane, dX, dY), basePlane, 0.006), -intOffcut.X, true).ToBrep();
-
-            // display clean-up
-            display.Faces.SplitKinkyFaces(0.0001);
-            if (BrepSolidOrientation.Inward == display.SolidOrientation)
-                display.Flip();
-        }
-
-
-
-        //------------------------------------------------------------
         // CreateIntersectionJoint method
         //------------------------------------------------------------
         protected void CreateIntersectionJoint(Brep cutter, List<Offcut> offcutList, List<int> indices, out List<Offcut> outOffcutList, out List<Offcut> intersectOffcut)
         {
-            // list & array to store data for boolean difference
             List<Brep> cutters = new List<Brep> { cutter };
-            List<Brep> cut = new List<Brep>();
 
-            for (int i = 0; i < offcutList.Count; i++)
-            {
-                if (i == indices[0] || i == indices[1] || i == indices[2])
-                {
-                    Offcut offcut = new Offcut(offcutList[i]);
-                    cut.Add(offcut.OffcutGeometry);
-                }
-                else
-                    continue;
-            }
-
-            // perform boolean difference
-            Brep[] cutBreps = Brep.CreateBooleanDifference(cut, cutters, 0.0001);
-
-            // initialise output list and list of volumes to get the biggest piece
-            List<Brep> brepList = new List<Brep>();
-            List<double> volumeList = new List<double>();
-
-            // clean-up and add to output list
-            foreach (Brep brep in cutBreps)
-            {
-                // brep clean-up
-                brep.Faces.SplitKinkyFaces(0.0001);
-                brep.MergeCoplanarFaces(0.0001);
-                brep.Faces.SplitKinkyFaces(0.0001);
-
-                // check solid orientation and return
-                if (BrepSolidOrientation.Inward == brep.SolidOrientation)
-                {
-                    brep.Flip();
-                    volumeList.Add(brep.GetVolume(0.0001, 0.0001));
-                    brepList.Add(brep);
-                }
-                else
-                {
-                    volumeList.Add(brep.GetVolume(0.0001, 0.0001));
-                    brepList.Add(brep);
-                }
-            }
-
-            // get the three biggest volumes by sorting and reversing the volume list
-            List<double> duplicateVolume = new List<double>(volumeList);
-
-            volumeList.Sort();
-            volumeList.Reverse();
-
-            var maxThree = volumeList.Take(3);
-
-            // get indices of max volumes
-            List <int> maxIndices = new List<int>();
-            foreach (double maxVal in maxThree)
-                maxIndices.Add(duplicateVolume.IndexOf(maxVal));
-
-            // sort list of indices
-            maxIndices.Sort();
-
-            // output lists
             outOffcutList = new List<Offcut>();
             intersectOffcut = new List<Offcut>();
 
-            // create new Offcuts and update the Offcut's geometry
             for (int i = 0; i < offcutList.Count; i++)
             {
-                if (i == indices[0])
+                Offcut newOffcut = new Offcut(offcutList[i]);
+
+                if (indices.Contains(i))
                 {
-                    Offcut newOffcut = new Offcut(offcutList[i]) { OffcutGeometry = brepList[maxIndices[0]] };
-                    outOffcutList.Add(newOffcut);
-                    intersectOffcut.Add(newOffcut);
+                    // cut every Offcut on its own: cutting them as one list and matching the pieces
+                    // back by sorted volume pairs each piece with its Offcut only by coincidence
+                    Brep[] pieces = Brep.CreateBooleanDifference(new List<Brep> { newOffcut.OffcutGeometry }, cutters, 0.0001);
+
+                    if (pieces == null || pieces.Length == 0)
+                        AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, $"Could not cut the joint into Offcut {i}; it is returned uncut.");
+                    else
+                    {
+                        foreach (Brep piece in pieces)
+                        {
+                            // brep clean-up
+                            piece.Faces.SplitKinkyFaces(0.0001);
+                            piece.MergeCoplanarFaces(0.0001);
+                            piece.Faces.SplitKinkyFaces(0.0001);
+
+                            // check solid orientation
+                            if (BrepSolidOrientation.Inward == piece.SolidOrientation)
+                                piece.Flip();
+                        }
+
+                        // the cutter can sever the Offcut, so keep the biggest piece
+                        newOffcut.OffcutGeometry = pieces.OrderByDescending(brep => brep.GetVolume(0.0001, 0.0001)).First();
+                        intersectOffcut.Add(newOffcut);
+                    }
                 }
 
-                else if (i == indices[1])
-                {
-                    Offcut newOffcut = new Offcut(offcutList[i]) { OffcutGeometry = brepList[maxIndices[1]] };
-                    outOffcutList.Add(newOffcut);
-                    intersectOffcut.Add(newOffcut);
-                }
-
-                else if (i == indices[2])
-                {
-                    Offcut newOffcut = new Offcut(offcutList[i]) { OffcutGeometry = brepList[maxIndices[2]] };
-                    outOffcutList.Add(newOffcut);
-                    intersectOffcut.Add(newOffcut);
-                }
-
-                else
-                {
-                    Offcut newOffcut = new Offcut(offcutList[i]);
-                    outOffcutList.Add(newOffcut);
-                }
-            }
-        }
-
-
-        //------------------------------------------------------------
-        // GetCuttingGeometry method
-        //------------------------------------------------------------
-        protected void GetSplineBase(Curve curve, List<Offcut> intersectionOffcuts, Point3d intersectionPoint, out List<Plane> basePlanes, out List<Offcut> intOffcuts)
-        {
-            // array of points to store the intersection points
-            Point3d[,] pointArray = new Point3d[intersectionOffcuts.Count, 2];
-
-            // get the two intersection points per brep
-            for (int i = 0; i < intersectionOffcuts.Count; i++)
-            {
-                Intersection.CurveBrep(curve, intersectionOffcuts[i].OffcutGeometry, 0.0001, out _, out Point3d[] intPoints);
-                pointArray[i, 0] = intPoints[0];
-                pointArray[i, 1] = intPoints[1];
-            }
-
-            // get the closest point per brep
-            List<Point3d> closestPt = new List<Point3d>();
-
-            for (int i = 0; i < intersectionOffcuts.Count; i++)
-            {
-                if (intersectionPoint.DistanceTo(pointArray[i, 0]) < intersectionPoint.DistanceTo(pointArray[i, 1]))
-                    closestPt.Add(pointArray[i, 0]);
-                else
-                    closestPt.Add(pointArray[i, 1]);
-            }
-
-            // get the two closest points
-            List<double> minDistance = new List<double>();
-
-            foreach (Point3d pt in closestPt)
-                minDistance.Add(intersectionPoint.DistanceTo(pt));
-
-            // duplicate and sort distances
-            List<double> minDuplicate = new List<double>(minDistance);
-            minDistance.Sort();
-
-            // create list of indices
-            List<int> indices = new List<int> { minDuplicate.IndexOf(minDistance[0]), minDuplicate.IndexOf(minDistance[1]) };
-
-            // return lists
-            basePlanes = new List<Plane>();
-            intOffcuts = new List<Offcut>();
-
-            // assign closest points as origin to average plane and add data to return lists
-            foreach (int index in indices)
-            {
-                Plane plane = new Plane(intersectionOffcuts[index].AveragePlane);
-                plane.Origin = closestPt[index];
-                basePlanes.Add(plane);
-
-                intOffcuts.Add(intersectionOffcuts[index]);
+                outOffcutList.Add(newOffcut);
             }
         }
 
@@ -463,22 +256,6 @@ namespace SpruceBeetle.Alignment
 
 
         //------------------------------------------------------------
-        // GetCuttingGeometry method
-        //------------------------------------------------------------
-        protected void GetBasePlane(List<Offcut> offcutList, Point3d intPt, double angle, out List<int> indicies, out Plane basePlane)
-        {
-            // call GetClosestOffcutIndex method
-            GetClosestOffcutIndex(offcutList, intPt, out int index, out indicies);
-
-            // get base plane
-            basePlane = new Plane(offcutList[index].MovedAveragePlane);
-
-            // rotate base plane as indicated
-            basePlane.Transform(Transform.Rotation(Utility.ConvertToRadians(angle), basePlane.ZAxis, basePlane.Origin));
-        }
-
-
-        //------------------------------------------------------------
         // GetClosestOffcutIndex method
         //------------------------------------------------------------
         protected void GetClosestOffcutIndex(List<Offcut> offcutList, Point3d intPt, out int closestIndex, out List<int> indexList)
@@ -494,21 +271,9 @@ namespace SpruceBeetle.Alignment
                 distances.Add(distance);
             }
 
-            // get the index of the Offcut closest to the intersection point
-            closestIndex = distances.IndexOf(distances.Min());
-
-            // duplicate distances list to sort and find smallest three distances
-            List<double> distancesCopy = new List<double>(distances);
-
-            // sort list and take three
-            distancesCopy.Sort();
-
-            var minThree = distancesCopy.Take(3);
-
-            // add data to the return list
-            indexList = new List<int>();
-            foreach (double min in minThree)
-                indexList.Add(distances.IndexOf(min));
+            // the three Offcuts closest to the intersection point, nearest first
+            indexList = Utility.SortedIndices(distances, 3);
+            closestIndex = indexList[0];
         }
 
 
@@ -520,7 +285,7 @@ namespace SpruceBeetle.Alignment
         public override GH_Exposure Exposure => GH_Exposure.secondary;
 
         // add icon
-        protected override System.Drawing.Bitmap Icon => Properties.Resources._24x24_IntersectionJoints;
+        protected override System.Drawing.Bitmap Icon => Utility.Icon("24x24_IntersectionJoints");
 
         // component giud
         public override Guid ComponentGuid => new Guid("7B5A7106-2285-4056-9117-BC95A627FD04");

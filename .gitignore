@@ -8,3 +8,21 @@
 *.bak
 *.3dmbak
 *.dmp
+
+# .net files
+bin/
+obj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Build output (attached to releases / packed with yak)
+Compiled/
+*.dll
+
+# LLM files
+docs/
+CLAUDE.md
+PLAN.md

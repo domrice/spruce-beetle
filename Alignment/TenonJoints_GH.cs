@@ -1,4 +1,4 @@
-﻿/*
+/*
  * MIT License
  * 
  * Copyright (c) 2022 Dominik Reisach
@@ -151,108 +151,14 @@ namespace SpruceBeetle.Alignment
             Dictionary<string, int> jointDict = Joint.GetJointType();
             int jointType = jointDict[jointKey];
 
-            // initialise lists to store all the data
-            Brep[] outputOffcuts = new Brep[alignedOffcuts.Count];
-            Brep[,] outputJoints = new Brep[alignedOffcuts.Count, tenonCount];
-            double[] outputOffcutVol = new double[alignedOffcuts.Count];
-            double[] outputJointVol = new double[alignedOffcuts.Count];
-
-            // parallel computed joints with boolean difference
-            System.Threading.Tasks.Parallel.For(0, alignedOffcuts.Count, (i, state) =>
-            {
-                // get the base for the joint position of each Offcut
-                List<double[]> minimumDimensions = Utility.GetMinimumDimension(alignedOffcuts, i);
-                double[] firstMin = minimumDimensions[0];
-                double[] secondMin = minimumDimensions[1];
-
-                // create joints with their respective volumes according to the joint type
-                if (i == 0)
+            // run the shared joint pass with the tenon cutter - a tenon is its own display
+            JointPass.Run(alignedOffcuts, tenonCount,
+                (Plane plane, double[] minValue, Offcut offcut, out Brep[] cutters, out Brep[] display) =>
                 {
-                    // call CreateJoints method
-                    CreateTenons(alignedOffcuts[i].SecondPlane, jointX, jointY, jointZ, toolRadius, secondMin, alignedOffcuts[i].PositionIndex, jointType, tenonCount, jointShape, out Brep[] joints);
-
-                    // call CutOffcut method
-                    Brep cutOffcut = Joint.CutOffcut(joints, alignedOffcuts[i].OffcutGeometry);
-
-                    // add data to the Offcut
-                    outputOffcuts[i] = cutOffcut;
-                    outputOffcutVol[i] = cutOffcut.GetVolume(0.0001, 0.0001);
-
-                    // output joint data
-                    outputJointVol[i] = joints[0].GetVolume(0.0001, 0.0001) * tenonCount;
-
-                    for (int j = 0; j < joints.Length; j++)
-                    {
-                        outputJoints[i, j] = joints[j];
-                    }
-                }
-
-                else if (i == alignedOffcuts.Count - 1)
-                {
-                    // call CreateJoints method
-                    CreateTenons(alignedOffcuts[i].FirstPlane, jointX, jointY, jointZ, toolRadius, firstMin, alignedOffcuts[i].PositionIndex, jointType, tenonCount, jointShape, out Brep[] joints);
-
-                    // call CutOffcut method
-                    Brep cutOffcut = Joint.CutOffcut(joints, alignedOffcuts[i].OffcutGeometry);
-
-                    // add data to the Offcut
-                    outputOffcuts[i] = cutOffcut;
-                    outputOffcutVol[i] = cutOffcut.GetVolume(0.0001, 0.0001);
-                }
-
-                else
-                {
-                    // call CreateJoints method for both ends of the Offcuts
-                    CreateTenons(alignedOffcuts[i].FirstPlane, jointX, jointY, jointZ, toolRadius, firstMin, alignedOffcuts[i].PositionIndex, jointType, tenonCount, jointShape, out Brep[] firstJoints);
-                    CreateTenons(alignedOffcuts[i].SecondPlane, jointX, jointY, jointZ, toolRadius, secondMin, alignedOffcuts[i].PositionIndex, jointType, tenonCount, jointShape, out Brep[] secondJoints);
-
-                    // add all joints to one single array
-                    Brep[] cutterBreps = new Brep[tenonCount * 2];
-
-                    // output joint data and add joints to brep array
-                    outputJointVol[i] = secondJoints[0].GetVolume(0.0001, 0.0001) * tenonCount;
-
-                    // add all joints to one single array
-                    for (int j = 0; j < secondJoints.Length; j++)
-                    {
-                        cutterBreps[j] = firstJoints[j];
-                        cutterBreps[j + tenonCount] = secondJoints[j];
-                        outputJoints[i, j] = secondJoints[j];
-                    }
-
-                    // call CutOffcut method
-                    Brep cutOffcut = Joint.CutOffcut(cutterBreps, alignedOffcuts[i].OffcutGeometry);
-
-                    // add data to the Offcut
-                    outputOffcuts[i] = cutOffcut;
-                    outputOffcutVol[i] = cutOffcut.GetVolume(0.0001, 0.0001);
-                }
-
-                // stop parallel loop
-                if (i >= alignedOffcuts.Count)
-                {
-                    state.Stop();
-                    return;
-                }
-
-                if (state.IsStopped)
-                    return;
-            });
-
-            // output data to new Offcut_GH list
-            List<Offcut_GH> offcutGHList = new List<Offcut_GH>();
-
-            for (int i = 0; i < alignedOffcuts.Count; i++)
-            {
-                Offcut localOffcut = new Offcut(alignedOffcuts[i])
-                {
-                    OffcutGeometry = outputOffcuts[i],
-                    FabVol = outputOffcutVol[i]
-                };
-
-                Offcut_GH offcutGH = new Offcut_GH(localOffcut);
-                offcutGHList.Add(offcutGH);
-            }
+                    CreateTenons(plane, jointX, jointY, jointZ, toolRadius, minValue, offcut.PositionIndex, jointType, tenonCount, jointShape, out cutters);
+                    display = cutters;
+                },
+                out List<Offcut_GH> offcutGHList, out Brep[,] outputJoints, out double[] outputJointVol);
 
             // access output parameters
             DA.SetDataList(0, offcutGHList);
@@ -264,7 +170,7 @@ namespace SpruceBeetle.Alignment
         //------------------------------------------------------------
         // CreateTenons method
         //------------------------------------------------------------
-        protected void CreateTenons(Plane plane, double jointX, double jointY, double jointZ, double toolRadius, double[] minValue, int positionIndex, int jointType, int tenonCount, Curve jointShape, out Brep[] returnJoints)
+        protected static void CreateTenons(Plane plane, double jointX, double jointY, double jointZ, double toolRadius, double[] minValue, int positionIndex, int jointType, int tenonCount, Curve jointShape, out Brep[] returnJoints)
         {
             // initialise new plane
             Plane basePlane = new Plane(plane);
@@ -308,7 +214,7 @@ namespace SpruceBeetle.Alignment
         //------------------------------------------------------------
         // RectJoint method
         //------------------------------------------------------------
-        protected void RectJoint(Plane plane, double jointX, double jointY, double jointZ, double[] minValue, double toolRadius, int tenonCount, out Brep[] joints)
+        protected static void RectJoint(Plane plane, double jointX, double jointY, double jointZ, double[] minValue, double toolRadius, int tenonCount, out Brep[] joints)
         {
             // initialise empty brep variable
             joints = new Brep[tenonCount];
@@ -353,7 +259,7 @@ namespace SpruceBeetle.Alignment
         //------------------------------------------------------------
         // CrossJoint method
         //------------------------------------------------------------
-        protected void CrossJoint(Plane plane, double jointX, double jointY, double jointZ, double[] minValue, double toolRadius, int tenonCount, out Brep[] joints)
+        protected static void CrossJoint(Plane plane, double jointX, double jointY, double jointZ, double[] minValue, double toolRadius, int tenonCount, out Brep[] joints)
         {
             // initialise empty brep variable
             joints = new Brep[tenonCount];
@@ -409,7 +315,7 @@ namespace SpruceBeetle.Alignment
         //------------------------------------------------------------
         // CreateCustomTenon method
         //------------------------------------------------------------
-        protected void CreateCustomTenon(Curve shape, Plane plane, double jointX, double jointY, double jointZ, double[] minValue, double toolRadius, int tenonCount, out Brep[] joints)
+        protected static void CreateCustomTenon(Curve shape, Plane plane, double jointX, double jointY, double jointZ, double[] minValue, double toolRadius, int tenonCount, out Brep[] joints)
         {
             // initialise empty brep variable
             joints = new Brep[tenonCount];
@@ -475,7 +381,7 @@ namespace SpruceBeetle.Alignment
         public override GH_Exposure Exposure => GH_Exposure.secondary;
 
         // add icon
-        protected override System.Drawing.Bitmap Icon => Properties.Resources._24x24_TenonJoints;
+        protected override System.Drawing.Bitmap Icon => Utility.Icon("24x24_TenonJoints");
 
         // component giud
         public override Guid ComponentGuid => new Guid("0CAE8FA6-7CFE-4C2E-8E19-AE5F005EF8FB");

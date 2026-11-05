@@ -1,4 +1,4 @@
-﻿/*
+/*
  * MIT License
  * 
  * Copyright (c) 2022 Dominik Reisach
@@ -100,7 +100,7 @@ namespace SpruceBeetle.Create
         public override GH_Exposure Exposure => GH_Exposure.primary;
 
         // add icon
-        protected override System.Drawing.Bitmap Icon => Properties.Resources._24x24_ConstructOffcut;
+        protected override System.Drawing.Bitmap Icon => Utility.Icon("24x24_ConstructOffcut");
 
         // component giud
         public override Guid ComponentGuid => new Guid("6D5E4857-46B8-4031-8BBD-BCE54D1FF71D");

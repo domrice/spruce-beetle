@@ -1,4 +1,4 @@
-﻿/*
+/*
  * MIT License
  * 
  * Copyright (c) 2022 Dominik Reisach
@@ -66,33 +66,36 @@ namespace SpruceBeetle.Fabricate
             DA.GetData(1, ref delimiter);
 
             if (filePath == null)
-                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "No file path provided!");
-            else
             {
-                // read CSV file and add string data to list
-                ReadCSV readCSV = new ReadCSV(filePath);
-                List<string> coordinatesTxt = readCSV.GetCSVData();
-
-                // initialise list of points
-                List<Point3d> ptList = new List<Point3d>();
-
-                for (int i = 0; i < coordinatesTxt.Count; i++)
-                {
-                    // split string into coordinate strings
-                    string[] coordinates = coordinatesTxt[i].Split(delimiter.ToCharArray()[0]);
-
-                    // convert strings to doubles
-                    double x = Convert.ToDouble(coordinates[0]);
-                    double y = Convert.ToDouble(coordinates[1]);
-                    double z = Convert.ToDouble(coordinates[2]);
-
-                    // create new point and add to list
-                    ptList.Add(new Point3d(x, y, z));
-                }
-
-                // output coordinates
-                DA.SetDataList(0, ptList);
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "No file path provided!");
+                return;
             }
+
+            if (!System.IO.File.Exists(filePath))
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, $"No file at \"{filePath}\"");
+                return;
+            }
+
+            // one row per point: x, y, z
+            List<Point3d> ptList = new List<Point3d>();
+            List<int> badRows = new List<int>();
+
+            List<string[]> rows = CSV.ReadRows(filePath, delimiter);
+
+            for (int i = 0; i < rows.Count; i++)
+            {
+                if (CSV.TryParseRow(rows[i], 3, out double[] values))
+                    ptList.Add(new Point3d(values[0], values[1], values[2]));
+                else
+                    badRows.Add(i + 1);
+            }
+
+            if (badRows.Count > 0)
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning,
+                    $"Skipped {badRows.Count} row(s) that are not three numbers separated by \"{delimiter}\": line(s) {string.Join(", ", badRows)}");
+
+            DA.SetDataList(0, ptList);
         }
 
 
@@ -104,7 +107,7 @@ namespace SpruceBeetle.Fabricate
         public override GH_Exposure Exposure => GH_Exposure.primary;
 
         // add icon
-        protected override System.Drawing.Bitmap Icon => Properties.Resources._24x24_CSVCoord;
+        protected override System.Drawing.Bitmap Icon => Utility.Icon("24x24_CSVCoord");
 
         // component giud
         public override Guid ComponentGuid => new Guid("4D21D990-C212-4500-9B04-9DB6C9BB9BD8");

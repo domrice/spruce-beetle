@@ -1,4 +1,4 @@
-﻿/*
+/*
  * MIT License
  * 
  * Copyright (c) 2022 Dominik Reisach
@@ -66,45 +66,36 @@ namespace SpruceBeetle.Create
             DA.GetData(1, ref delimiter);
 
             if (filePath == null)
-                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "No file path provided!");
-            else
             {
-                // read CSV file and add string data to list
-                ReadCSV readCSV = new ReadCSV(filePath);
-                List<string> coordinatesTxt = readCSV.GetCSVData();
-
-                // initialise new list of Offcuts
-                List<Offcut> offcutList = new List<Offcut>();
-
-                // iterate over strings from csv file, convert to Offcut and add to list
-                for (int i = 0; i < coordinatesTxt.Count; i++)
-                {
-                    // split string into coordinate strings
-                    string[] coordinates = coordinatesTxt[i].Split(delimiter.ToCharArray()[0]);
-
-                    // convert strings to doubles
-                    double index = Convert.ToDouble(coordinates[0]);
-                    double x = Convert.ToDouble(coordinates[1]);
-                    double y = Convert.ToDouble(coordinates[2]);
-                    double z = Convert.ToDouble(coordinates[3]);
-
-                    // initialise new Offcut instance
-                    Offcut offcut = new Offcut(index, x, y, z);
-                    
-                    // add Offcut to list
-                    offcutList.Add(offcut);
-                }
-
-                // change data type for output to GH
-                List<Offcut_GH> offcutGHList = new List<Offcut_GH>();
-                foreach (Offcut offcut in offcutList)
-                {
-                    Offcut_GH offcutGH = new Offcut_GH(offcut);
-                    offcutGHList.Add(offcutGH);
-                }
-
-                DA.SetDataList(0, offcutGHList);
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "No file path provided!");
+                return;
             }
+
+            if (!System.IO.File.Exists(filePath))
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, $"No file at \"{filePath}\"");
+                return;
+            }
+
+            // one row per Offcut: index, x, y, z
+            List<Offcut_GH> offcutGHList = new List<Offcut_GH>();
+            List<int> badRows = new List<int>();
+
+            List<string[]> rows = CSV.ReadRows(filePath, delimiter);
+
+            for (int i = 0; i < rows.Count; i++)
+            {
+                if (CSV.TryParseRow(rows[i], 4, out double[] values))
+                    offcutGHList.Add(new Offcut_GH(new Offcut((int)values[0], values[1], values[2], values[3])));
+                else
+                    badRows.Add(i + 1);
+            }
+
+            if (badRows.Count > 0)
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning,
+                    $"Skipped {badRows.Count} row(s) that are not four numbers separated by \"{delimiter}\": line(s) {string.Join(", ", badRows)}");
+
+            DA.SetDataList(0, offcutGHList);
         }
 
 
@@ -116,7 +107,7 @@ namespace SpruceBeetle.Create
         public override GH_Exposure Exposure => GH_Exposure.primary;
 
         // add icon
-        protected override System.Drawing.Bitmap Icon => Properties.Resources._24x24_CSVOffcut;
+        protected override System.Drawing.Bitmap Icon => Utility.Icon("24x24_CSVOffcut");
 
         // component giud
         public override Guid ComponentGuid => new Guid("6B75A8EE-F73C-4C56-BD2A-8B8C8EA57CE9");
